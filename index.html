@@ -491,14 +491,7 @@
           
           <!-- 图像输出 -->
           <div id="image-output" class="hidden min-h-[200px] max-h-[400px] overflow-y-auto p-4 bg-gray-50 rounded-md scrollbar-thin">
-            <div class="flex flex-wrap gap-4 justify-center">
-              <div class="image-container relative">
-                <img id="generated-image" class="max-w-full max-h-[350px] object-contain rounded-md shadow-sm" alt="生成的图像">
-                <button class="absolute top-2 right-2 p-1.5 bg-white rounded-full shadow-md hover:bg-gray-100 transition-colors">
-                  <i class="fa fa-search-plus text-gray-600"></i>
-                </button>
-              </div>
-            </div>
+            <div id="image-grid" class="grid grid-cols-1 sm:grid-cols-2 gap-4"></div>
           </div>
           
           <!-- 3D模型输出 -->
@@ -516,6 +509,11 @@
                 </a>
               </div>
             </div>
+          </div>
+
+          <!-- 文件输出 -->
+          <div id="file-output" class="hidden min-h-[200px] max-h-[400px] overflow-y-auto p-4 bg-gray-50 rounded-md scrollbar-thin">
+            <div id="file-list" class="space-y-3"></div>
           </div>
         </div>
         
@@ -993,13 +991,74 @@
         || JSON.stringify(response, null, 2);
     }
 
-    // 规范化图像 URL 输出
-    function normalizeImageUrl(response) {
-      return response?.data?.[0]?.url
-        || response?.imageUrl
-        || response?.url
-        || response?.images?.[0]?.url
-        || null;
+    // 规范化图像 URL 输出（支持多图）
+    function normalizeImageUrls(response) {
+      const urls = new Set();
+      const maybeUrls = [
+        response?.imageUrl,
+        response?.url,
+        response?.data?.[0]?.url,
+        response?.images?.[0]?.url
+      ];
+      maybeUrls.forEach(url => {
+        if (typeof url === 'string' && url.trim()) urls.add(url.trim());
+      });
+
+      const containers = [response?.data, response?.images, response?.results, response?.output];
+      containers.forEach(list => {
+        if (!Array.isArray(list)) return;
+        list.forEach(item => {
+          if (typeof item === 'string' && item.trim()) {
+            urls.add(item.trim());
+            return;
+          }
+          if (!item || typeof item !== 'object') return;
+          if (typeof item.url === 'string' && item.url.trim()) urls.add(item.url.trim());
+          if (typeof item.imageUrl === 'string' && item.imageUrl.trim()) urls.add(item.imageUrl.trim());
+          if (typeof item.uri === 'string' && item.uri.trim()) urls.add(item.uri.trim());
+          if (item.b64_json) urls.add(`data:image/png;base64,${item.b64_json}`);
+        });
+      });
+      return Array.from(urls);
+    }
+
+    // 规范化 Meshy 输出（支持图片与文件）
+    function normalizeMeshyOutput(response) {
+      const modelUrl = response?.model_urls?.glb
+        || response?.result?.model_urls?.glb
+        || response?.result?.modelUrl
+        || response?.modelUrl
+        || '';
+
+      const previewUrl = response?.thumbnail_url
+        || response?.result?.thumbnail_url
+        || response?.previewUrl
+        || '';
+
+      const fileCandidates = [
+        response?.model_urls,
+        response?.result?.model_urls,
+        response?.files,
+        response?.result?.files
+      ];
+      const files = [];
+      fileCandidates.forEach(candidate => {
+        if (!candidate) return;
+        if (Array.isArray(candidate)) {
+          candidate.forEach((item, idx) => {
+            if (!item) return;
+            if (typeof item === 'string') files.push({ name: `文件 ${idx + 1}`, url: item });
+            if (item.url) files.push({ name: item.name || item.type || `文件 ${idx + 1}`, url: item.url });
+          });
+        } else if (typeof candidate === 'object') {
+          Object.entries(candidate).forEach(([name, url]) => {
+            if (typeof url === 'string' && url.trim()) files.push({ name, url });
+          });
+        }
+      });
+
+      const imageUrls = normalizeImageUrls(response).concat(normalizeImageUrls(response?.result || {}));
+      return { modelUrl, previewUrl, files, imageUrls: Array.from(new Set(imageUrls)) };
     }
 
     // 规范化 Meshy topology（兼容旧配置 low/medium/high）
@@ -1044,16 +1103,9 @@
 
         const status = queryData?.status || queryData?.result?.status;
         if (status === 'SUCCEEDED' || status === 'completed') {
+          const normalized = normalizeMeshyOutput(queryData);
           return {
-            modelUrl: queryData?.model_urls?.glb
-              || queryData?.result?.model_urls?.glb
-              || queryData?.result?.modelUrl
-              || queryData?.modelUrl
-              || '',
-            previewUrl: queryData?.thumbnail_url
-              || queryData?.result?.thumbnail_url
-              || queryData?.previewUrl
-              || '',
+            ...normalized,
             taskId,
             duration: performance.now() - startTime
           };
@@ -1152,9 +1204,9 @@
           const data = await response.json();
           if (!response.ok) throw new Error(data?.error?.message || data?.message || 'Banana 请求失败');
 
-          const imageUrl = normalizeImageUrl(data);
-          if (!imageUrl) throw new Error('接口返回成功但未找到图片 URL，请确认该 API 的响应格式');
-          handleResponse(model, input, { imageUrl, raw: data }, performance.now() - startTime);
+          const imageUrls = normalizeImageUrls(data);
+          if (!imageUrls.length) throw new Error('接口返回成功但未找到图片 URL，请确认该 API 的响应格式');
+          handleResponse(model, input, { imageUrls, raw: data }, performance.now() - startTime);
         } else if (model === 'meshy') {
           input = document.getElementById('meshy-prompt').value.trim();
           if (!input) throw new Error('请输入3D模型描述');
@@ -1231,23 +1283,28 @@
         }
         
       } else if (model === 'banana') {
-        showImageOutput(response.imageUrl);
+        showImageOutput(response.imageUrls || []);
         
         // 添加到对比结果
         if (isModelSelectedForComparison(model)) {
-          comparisonResults[model] = response.imageUrl;
+          comparisonResults[model] = response.imageUrls || [];
           updateComparisonView();
         }
         
       } else if (model === 'meshy') {
-        showModelOutput(response.modelUrl, response.previewUrl);
+        if (response.modelUrl) {
+          showModelOutput(response.modelUrl, response.previewUrl);
+        } else if (response.files?.length) {
+          showFileOutput(response.files, 'Meshy 输出文件');
+        } else if (response.imageUrls?.length) {
+          showImageOutput(response.imageUrls);
+        } else {
+          showTextOutput('接口调用成功，但未解析到可展示的模型、图片或文件。');
+        }
         
         // 添加到对比结果
         if (isModelSelectedForComparison(model)) {
-          comparisonResults[model] = {
-            modelUrl: response.modelUrl,
-            previewUrl: response.previewUrl
-          };
+          comparisonResults[model] = response;
           updateComparisonView();
         }
       }
@@ -1264,6 +1321,7 @@
       // 隐藏其他输出
       document.getElementById('image-output').classList.add('hidden');
       document.getElementById('model-output').classList.add('hidden');
+      document.getElementById('file-output').classList.add('hidden');
       
       // 显示文本输出
       const textOutput = document.getElementById('text-output');
@@ -1272,17 +1330,26 @@
     }
     
     // 显示图像输出
-    function showImageOutput(imageUrl) {
+    function showImageOutput(imageUrls) {
       // 隐藏其他输出
       document.getElementById('text-output').classList.add('hidden');
       document.getElementById('model-output').classList.add('hidden');
+      document.getElementById('file-output').classList.add('hidden');
       
       // 显示图像输出
       const imageOutput = document.getElementById('image-output');
       imageOutput.classList.remove('hidden');
       
-      // 设置图像源
-      document.getElementById('generated-image').src = imageUrl;
+      const list = Array.isArray(imageUrls) ? imageUrls : [imageUrls];
+      const grid = document.getElementById('image-grid');
+      grid.innerHTML = list.map((url, index) => `
+        <div class="image-container relative bg-white rounded-md p-2 shadow-sm">
+          <img src="${url}" class="w-full max-h-[300px] object-contain rounded-md" alt="生成的图像 ${index + 1}">
+          <button class="absolute top-3 right-3 p-1.5 bg-white rounded-full shadow-md hover:bg-gray-100 transition-colors">
+            <i class="fa fa-search-plus text-gray-600"></i>
+          </button>
+        </div>
+      `).join('');
     }
     
     // 显示3D模型输出
@@ -1290,6 +1357,7 @@
       // 隐藏其他输出
       document.getElementById('text-output').classList.add('hidden');
       document.getElementById('image-output').classList.add('hidden');
+      document.getElementById('file-output').classList.add('hidden');
       
       // 显示模型输出
       const modelOutput = document.getElementById('model-output');
@@ -1315,6 +1383,28 @@
       // 设置下载链接
       document.getElementById('model-download-link').href = modelUrl;
     }
+
+    // 显示文件输出
+    function showFileOutput(files, title = '输出文件') {
+      document.getElementById('text-output').classList.add('hidden');
+      document.getElementById('image-output').classList.add('hidden');
+      document.getElementById('model-output').classList.add('hidden');
+
+      const fileOutput = document.getElementById('file-output');
+      fileOutput.classList.remove('hidden');
+      const fileList = document.getElementById('file-list');
+      fileList.innerHTML = `
+        <p class="text-sm text-gray-600 mb-2">${escapeHtml(title)}</p>
+        ${files.map((file, index) => `
+          <a href="${file.url}" target="_blank" rel="noopener noreferrer" class="block border border-gray-200 bg-white rounded-md px-3 py-2 hover:bg-gray-50">
+            <div class="flex items-center justify-between">
+              <span class="text-sm text-gray-700 truncate"><i class="fa fa-file mr-2 text-gray-500"></i>${escapeHtml(file.name || `文件 ${index + 1}`)}</span>
+              <span class="text-xs text-primary">打开 / 下载</span>
+            </div>
+          </a>
+        `).join('')}
+      `;
+    }
     
     // 重置输出区域
     function resetOutput() {
@@ -1322,6 +1412,7 @@
       document.getElementById('text-output').classList.remove('hidden');
       document.getElementById('image-output').classList.add('hidden');
       document.getElementById('model-output').classList.add('hidden');
+      document.getElementById('file-output').classList.add('hidden');
       
       // 重置文本输出
       document.getElementById('text-output').innerHTML = '<div class="text-gray-400 italic">响应结果将显示在这里...</div>';
@@ -1379,15 +1470,12 @@
         const output = document.getElementById('text-output').textContent;
         textToCopy = output;
       } else if (currentModel === 'banana') {
-        const img = document.getElementById('generated-image');
-        if (img && img.src) {
-          textToCopy = img.src;
-        }
+        const images = Array.from(document.querySelectorAll('#image-grid img')).map(img => img.src).filter(Boolean);
+        textToCopy = images.join('\n');
       } else if (currentModel === 'meshy') {
         const link = document.getElementById('model-download-link');
-        if (link && link.href) {
-          textToCopy = link.href;
-        }
+        const files = Array.from(document.querySelectorAll('#file-list a')).map(a => a.href).filter(Boolean);
+        textToCopy = [link?.href, ...files].filter(Boolean).join('\n');
       }
       
       if (textToCopy) {
@@ -1406,14 +1494,18 @@
         const output = document.getElementById('text-output').textContent;
         downloadTextFile(output, 'deepseek-response.txt');
       } else if (currentModel === 'banana') {
-        const img = document.getElementById('generated-image');
-        if (img && img.src) {
-          downloadImage(img.src, 'banana-image.png');
+        const images = Array.from(document.querySelectorAll('#image-grid img')).map(img => img.src).filter(Boolean);
+        if (images.length > 0) {
+          images.forEach((url, index) => downloadImage(url, `banana-image-${index + 1}.png`));
+          showNotification(`已触发 ${images.length} 张图片下载`, 'success');
         }
       } else if (currentModel === 'meshy') {
         const link = document.getElementById('model-download-link');
-        if (link && link.href) {
-          // 已经有下载按钮，这里可以提示用户
+        const files = Array.from(document.querySelectorAll('#file-list a')).map(a => a.href).filter(Boolean);
+        if (files.length > 0) {
+          files.forEach((url, index) => downloadImage(url, `meshy-file-${index + 1}`));
+          showNotification(`已触发 ${files.length} 个文件下载`, 'success');
+        } else if (link && link.href) {
           showNotification('请使用"下载模型"按钮', 'info');
         }
       }
@@ -1811,15 +1903,17 @@
             </div>
           `;
         } else if (model === 'banana') {
+          const preview = Array.isArray(result) ? result[0] : result;
           content = `
             <div class="bg-gray-50 rounded-md p-3 flex justify-center">
-              <img src="${result}" class="max-h-32 object-contain" alt="${modelNames[model]} 结果">
+              <img src="${preview}" class="max-h-32 object-contain" alt="${modelNames[model]} 结果">
             </div>
           `;
         } else if (model === 'meshy') {
+          const preview = result.previewUrl || result.imageUrls?.[0];
           content = `
             <div class="bg-gray-50 rounded-md p-3 flex justify-center">
-              <img src="${result.previewUrl}" class="max-h-32 object-contain" alt="${modelNames[model]} 结果">
+              ${preview ? `<img src="${preview}" class="max-h-32 object-contain" alt="${modelNames[model]} 结果">` : '<span class="text-xs text-gray-500">无可预览图像</span>'}
             </div>
           `;
         }
