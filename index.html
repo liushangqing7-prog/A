@@ -323,9 +323,8 @@
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">拓扑复杂度</label>
               <select id="meshy-topology" class="w-full px-3 py-2 border border-gray-300 rounded-md input-focus">
-                <option value="low">低</option>
-                <option value="medium" selected>中</option>
-                <option value="high">高</option>
+                <option value="triangle" selected>Triangle（三角面）</option>
+                <option value="quad">Quad（四边面）</option>
               </select>
             </div>
           </div>
@@ -732,7 +731,7 @@
         model: 'meshy-6',
         format: 'glb',
         textureQuality: 'medium',
-        topology: 'medium'
+        topology: 'triangle'
       }
     };
     
@@ -966,7 +965,7 @@
         config.model = document.getElementById('meshy-model').value;
         config.format = document.getElementById('meshy-format').value;
         config.textureQuality = document.getElementById('meshy-texture-quality').value;
-        config.topology = document.getElementById('meshy-topology').value;
+        config.topology = normalizeMeshyTopology(document.getElementById('meshy-topology').value);
       }
       
       // 保存到全局变量
@@ -1001,6 +1000,17 @@
         || response?.url
         || response?.images?.[0]?.url
         || null;
+    }
+
+    // 规范化 Meshy topology（兼容旧配置 low/medium/high）
+    function normalizeMeshyTopology(topology) {
+      if (topology === 'quad' || topology === 'triangle') return topology;
+      const legacyMap = {
+        low: 'triangle',
+        medium: 'triangle',
+        high: 'quad'
+      };
+      return legacyMap[topology] || 'triangle';
     }
 
     // 解析 Meshy 任务ID
@@ -1157,7 +1167,7 @@
             mode: 'preview',
             prompt: input,
             art_style: 'realistic',
-            topology: config.topology,
+            topology: normalizeMeshyTopology(config.topology),
             should_remesh: true,
             should_texture: true
           };
@@ -1750,7 +1760,9 @@
         document.getElementById('meshy-model').value = config.model || 'meshy-6';
         document.getElementById('meshy-format').value = config.format || 'glb';
         document.getElementById('meshy-texture-quality').value = config.textureQuality || 'medium';
-        document.getElementById('meshy-topology').value = config.topology || 'medium';
+        const normalizedTopology = normalizeMeshyTopology(config.topology);
+        configs.meshy.topology = normalizedTopology;
+        document.getElementById('meshy-topology').value = normalizedTopology;
       }
     }
     
