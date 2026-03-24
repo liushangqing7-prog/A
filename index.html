@@ -739,6 +739,8 @@
     
     // 请求超时设置（毫秒）
     const REQUEST_TIMEOUT = 30000; // 30秒
+    const MESHY_POLL_INTERVAL = 2000; // 2秒
+    const MESHY_POLL_TIMEOUT = 10 * 60 * 1000; // 10分钟
     
     let history = [];
     let comparisonResults = {};
@@ -1083,8 +1085,7 @@
 
     // 轮询 Meshy 任务
     async function pollMeshyTask(config, generationType, taskId, startTime) {
-      const maxPoll = 60;
-      for (let i = 0; i < maxPoll; i++) {
+      while (performance.now() - startTime < MESHY_POLL_TIMEOUT) {
         const queryUrl = generationType === 'text-to-3d'
           ? `${config.apiUrl}/text-to-3d/${taskId}`
           : `${config.apiUrl}/image-to-3d/${taskId}`;
@@ -1115,10 +1116,10 @@
           throw new Error(queryData?.message || 'Meshy 任务生成失败');
         }
 
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await new Promise(resolve => setTimeout(resolve, MESHY_POLL_INTERVAL));
       }
 
-      throw new Error('Meshy 任务轮询超时，请稍后在历史记录中重试');
+      throw new Error('Meshy 任务轮询超时（10分钟），请稍后在历史记录中重试');
     }
 
     // 带超时与可选代理的 fetch
