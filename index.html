@@ -98,7 +98,10 @@
     <!-- 介绍卡片 -->
     <div class="bg-white rounded-xl shadow-card p-6 mb-6">
       <h2 class="text-2xl font-bold mb-4">欢迎使用AI模型调用平台</h2>
-      <p class="text-gray-600 mb-4">本平台支持在同一页面内调用DeepSeek、Google Banana和Meshy三种AI模型，您可以配置API地址和密钥，发送请求并查看响应结果。</p>
+      <p class="text-gray-600 mb-2">本平台支持在同一页面内调用DeepSeek、Google Banana和Meshy三种AI模型，您可以配置API地址和密钥，发送请求并查看响应结果。</p>
+      <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4">
+        本页面发起的是真实网络请求（非模拟响应）。请注意：浏览器直连第三方 API 可能受到 CORS 限制，且密钥会暴露在前端环境，生产环境建议通过后端代理转发。
+      </p>
       <div class="flex flex-wrap gap-4">
         <div class="flex items-center space-x-2 bg-blue-50 px-4 py-2 rounded-lg">
           <div class="w-3 h-3 rounded-full bg-deepseek"></div>
@@ -221,7 +224,7 @@
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">API 地址</label>
-              <input type="text" id="banana-api-url" class="w-full px-3 py-2 border border-gray-300 rounded-md input-focus" value="https://api.banana-ai.org" placeholder="https://api.banana-ai.org">
+              <input type="text" id="banana-api-url" class="w-full px-3 py-2 border border-gray-300 rounded-md input-focus" value="https://generativelanguage.googleapis.com/v1beta" placeholder="https://generativelanguage.googleapis.com/v1beta">
             </div>
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">API 密钥</label>
@@ -276,7 +279,7 @@
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">API 地址</label>
-              <input type="text" id="meshy-api-url" class="w-full px-3 py-2 border border-gray-300 rounded-md input-focus" value="https://api.meshy.ai" placeholder="https://api.meshy.ai">
+              <input type="text" id="meshy-api-url" class="w-full px-3 py-2 border border-gray-300 rounded-md input-focus" value="https://api.meshy.ai/openapi/v2" placeholder="https://api.meshy.ai/openapi/v2">
             </div>
             <div>
               <label class="block text-sm font-medium text-gray-700 mb-1">API 密钥</label>
@@ -649,7 +652,7 @@
             <p class="text-gray-700 mb-2">您需要获取各模型的API密钥才能使用本平台：</p>
             <ul class="list-disc pl-5 space-y-1 text-gray-700">
               <li>DeepSeek: <a href="https://api.deepseek.com" target="_blank" class="text-primary hover:underline">https://api.deepseek.com</a></li>
-              <li>Google Banana: <a href="https://banana-ai.org" target="_blank" class="text-primary hover:underline">https://banana-ai.org</a></li>
+              <li>Google Banana: <a href="https://ai.google.dev/" target="_blank" class="text-primary hover:underline">https://ai.google.dev/</a></li>
               <li>Meshy: <a href="https://www.meshy.ai/zh/api" target="_blank" class="text-primary hover:underline">https://www.meshy.ai/zh/api</a></li>
             </ul>
           </div>
@@ -716,7 +719,7 @@
         systemPrompt: 'You are a helpful assistant.'
       },
       banana: {
-        apiUrl: 'https://api.banana-ai.org',
+        apiUrl: 'https://generativelanguage.googleapis.com/v1beta',
         apiKey: '',
         model: 'nano-banana-2',
         format: 'png',
@@ -724,7 +727,7 @@
         height: 1024
       },
       meshy: {
-        apiUrl: 'https://api.meshy.ai',
+        apiUrl: 'https://api.meshy.ai/openapi/v2',
         apiKey: '',
         model: 'meshy-6',
         format: 'glb',
@@ -975,50 +978,134 @@
       // 显示保存成功提示
       showNotification('配置保存成功', 'success');
     }
-    
+
+    // 获取对象路径值（如 data[0].url）
+    function getByPath(source, path) {
+      if (!path) return undefined;
+      const normalized = path.replace(/\[(\d+)\]/g, '.$1');
+      return normalized.split('.').filter(Boolean).reduce((acc, key) => acc?.[key], source);
+    }
+
+    // 规范化 DeepSeek 文本输出
+    function normalizeDeepSeekText(response) {
+      return response?.choices?.[0]?.message?.content
+        || response?.content
+        || response?.output_text
+        || JSON.stringify(response, null, 2);
+    }
+
+    // 规范化图像 URL 输出
+    function normalizeImageUrl(response) {
+      return response?.data?.[0]?.url
+        || response?.imageUrl
+        || response?.url
+        || response?.images?.[0]?.url
+        || null;
+    }
+
+    // 解析 Meshy 任务ID
+    function getMeshyTaskId(response) {
+      return response?.result
+        || response?.task_id
+        || response?.id
+        || response?.data?.id
+        || null;
+    }
+
+    // 轮询 Meshy 任务
+    async function pollMeshyTask(config, generationType, taskId, startTime) {
+      const maxPoll = 60;
+      for (let i = 0; i < maxPoll; i++) {
+        const queryUrl = generationType === 'text-to-3d'
+          ? `${config.apiUrl}/text-to-3d/${taskId}`
+          : `${config.apiUrl}/image-to-3d/${taskId}`;
+
+        const queryRes = await fetchWithCORS(queryUrl, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${config.apiKey}`
+          }
+        });
+        const queryData = await queryRes.json();
+
+        if (!queryRes.ok) {
+          throw new Error(queryData?.message || queryData?.error?.message || '查询 Meshy 任务失败');
+        }
+
+        const status = queryData?.status || queryData?.result?.status;
+        if (status === 'SUCCEEDED' || status === 'completed') {
+          return {
+            modelUrl: queryData?.model_urls?.glb
+              || queryData?.result?.model_urls?.glb
+              || queryData?.result?.modelUrl
+              || queryData?.modelUrl
+              || '',
+            previewUrl: queryData?.thumbnail_url
+              || queryData?.result?.thumbnail_url
+              || queryData?.previewUrl
+              || '',
+            taskId,
+            duration: performance.now() - startTime
+          };
+        }
+
+        if (status === 'FAILED' || status === 'failed') {
+          throw new Error(queryData?.message || 'Meshy 任务生成失败');
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+
+      throw new Error('Meshy 任务轮询超时，请稍后在历史记录中重试');
+    }
+
+    // 带超时与可选代理的 fetch
+    async function fetchWithCORS(url, options = {}) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+      const finalUrl = USE_CORS_PROXY ? `${CORS_PROXY}${url}` : url;
+
+      try {
+        return await fetch(finalUrl, {
+          ...options,
+          signal: controller.signal
+        });
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          throw new Error(`请求超时（>${REQUEST_TIMEOUT / 1000}秒）`);
+        }
+        throw error;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
     // 发送请求
     async function sendRequest(model) {
-      // 显示加载状态
       showLoading();
-      
-      // 重置错误信息
       hideError();
-      
-      // 获取配置和输入
+
       const config = configs[model];
-      let input, requestData, apiUrl;
-      
-      // 记录开始时间
+      let input = '';
       const startTime = performance.now();
-      
-      if (model === 'deepseek') {
-        input = document.getElementById('deepseek-user-prompt').value.trim();
-        
-        if (!input) {
-          showError('请输入提示词');
-          return;
-        }
-        
-        // 检查API密钥
-        if (!config.apiKey) {
-          showError('请配置API密钥');
-          return;
-        }
-        
-        requestData = {
-          model: config.model,
-          messages: [
-            { role: 'system', content: config.systemPrompt },
-            { role: 'user', content: input }
-          ],
-          temperature: config.temperature,
-          stream: document.getElementById('deepseek-stream').checked
-        };
-        
-        apiUrl = `${config.apiUrl}/chat/completions`;
-        
-        try {
-          // 使用CORS代理或直接调用API
+
+      try {
+        if (model === 'deepseek') {
+          input = document.getElementById('deepseek-user-prompt').value.trim();
+          if (!input) throw new Error('请输入提示词');
+          if (!config.apiKey) throw new Error('请配置API密钥');
+
+          const requestData = {
+            model: config.model,
+            messages: [
+              { role: 'system', content: config.systemPrompt || 'You are a helpful assistant.' },
+              { role: 'user', content: input }
+            ],
+            temperature: config.temperature,
+            stream: false
+          };
+
+          const apiUrl = `${config.apiUrl}/chat/completions`;
           const response = await fetchWithCORS(apiUrl, {
             method: 'POST',
             headers: {
@@ -1027,138 +1114,79 @@
             },
             body: JSON.stringify(requestData)
           });
-          
           const data = await response.json();
-          
-          if (!response.ok) {
-            throw new Error(data.error?.message || '请求失败');
-          }
-          
-          handleResponse(model, input, data, performance.now() - startTime);
-        } catch (error) {
-          showError(error.message);
-          addToHistory(model, input, null, 'error');
-        }
-        
-      } else if (model === 'banana') {
-        input = document.getElementById('banana-prompt').value.trim();
-        
-        if (!input) {
-          showError('请输入图像描述');
-          return;
-        }
-        
-        // 检查API密钥
-        if (!config.apiKey) {
-          showError('请配置API密钥');
-          return;
-        }
-        
-        const fileInput = document.getElementById('banana-reference-image');
-        const hasReferenceImage = fileInput.files && fileInput.files.length > 0;
-        
-        // 准备请求数据
-        const formData = new FormData();
-        formData.append('model', config.model);
-        formData.append('prompt', input);
-        formData.append('format', config.format);
-        formData.append('width', config.width.toString());
-        formData.append('height', config.height.toString());
-        
-        // 如果有参考图像，添加到FormData
-        if (hasReferenceImage) {
-          formData.append('reference_image', fileInput.files[0]);
-        }
-        
-        apiUrl = `${config.apiUrl}/generate`;
-        
-        try {
-          // 使用CORS代理或直接调用API
+          if (!response.ok) throw new Error(data?.error?.message || data?.message || 'DeepSeek 请求失败');
+
+          handleResponse(model, input, { content: normalizeDeepSeekText(data), raw: data }, performance.now() - startTime);
+        } else if (model === 'banana') {
+          input = document.getElementById('banana-prompt').value.trim();
+          if (!input) throw new Error('请输入图像描述');
+          if (!config.apiKey) throw new Error('请配置API密钥');
+
+          const requestData = {
+            model: config.model,
+            prompt: input,
+            size: `${config.width}x${config.height}`,
+            format: config.format
+          };
+
+          const apiUrl = `${config.apiUrl}/images/generations`;
           const response = await fetchWithCORS(apiUrl, {
             method: 'POST',
             headers: {
+              'Content-Type': 'application/json',
               'Authorization': `Bearer ${config.apiKey}`
             },
-            body: formData
+            body: JSON.stringify(requestData)
           });
-          
           const data = await response.json();
-          
-          if (!response.ok) {
-            throw new Error(data.error?.message || '请求失败');
-          }
-          
-          handleResponse(model, input, data, performance.now() - startTime);
-        } catch (error) {
-          showError(error.message);
-          addToHistory(model, input, null, 'error');
-        }
-        
-      } else if (model === 'meshy') {
-        input = document.getElementById('meshy-prompt').value.trim();
-        
-        if (!input) {
-          showError('请输入3D模型描述');
-          return;
-        }
-        
-        // 检查API密钥
-        if (!config.apiKey) {
-          showError('请配置API密钥');
-          return;
-        }
-        
-        const fileInput = document.getElementById('meshy-reference-image');
-        const hasReferenceImage = fileInput.files && fileInput.files.length > 0;
-        const generationType = document.getElementById('meshy-generation-type').value;
-        const poseMode = document.getElementById('meshy-pose-mode').value;
-        
-        // 准备请求数据
-        const formData = new FormData();
-        formData.append('model', config.model);
-        formData.append('prompt', input);
-        formData.append('format', config.format);
-        formData.append('texture_quality', config.textureQuality);
-        formData.append('topology', config.topology);
-        formData.append('generation_type', generationType);
-        
-        if (poseMode) {
-          formData.append('pose_mode', poseMode);
-        }
-        
-        // 如果有参考图像，添加到FormData
-        if (hasReferenceImage) {
-          formData.append('reference_image', fileInput.files[0]);
-        }
-        
-        // 根据生成类型选择API端点
-        if (generationType === 'text-to-3d') {
-          apiUrl = `${config.apiUrl}/text-to-3d`;
-        } else {
-          apiUrl = `${config.apiUrl}/image-to-3d`;
-        }
-        
-        try {
-          // 使用CORS代理或直接调用API
-          const response = await fetchWithCORS(apiUrl, {
+          if (!response.ok) throw new Error(data?.error?.message || data?.message || 'Banana 请求失败');
+
+          const imageUrl = normalizeImageUrl(data);
+          if (!imageUrl) throw new Error('接口返回成功但未找到图片 URL，请确认该 API 的响应格式');
+          handleResponse(model, input, { imageUrl, raw: data }, performance.now() - startTime);
+        } else if (model === 'meshy') {
+          input = document.getElementById('meshy-prompt').value.trim();
+          if (!input) throw new Error('请输入3D模型描述');
+          if (!config.apiKey) throw new Error('请配置API密钥');
+
+          const generationType = document.getElementById('meshy-generation-type').value;
+          const poseMode = document.getElementById('meshy-pose-mode').value;
+
+          const requestData = {
+            mode: 'preview',
+            prompt: input,
+            art_style: 'realistic',
+            topology: config.topology,
+            should_remesh: true,
+            should_texture: true
+          };
+          if (poseMode) requestData.pose = poseMode;
+
+          const createUrl = generationType === 'text-to-3d'
+            ? `${config.apiUrl}/text-to-3d`
+            : `${config.apiUrl}/image-to-3d`;
+          const createRes = await fetchWithCORS(createUrl, {
             method: 'POST',
             headers: {
+              'Content-Type': 'application/json',
               'Authorization': `Bearer ${config.apiKey}`
             },
-            body: formData
+            body: JSON.stringify(requestData)
           });
-          
-          const data = await response.json();
-          
-          if (!response.ok) {
-            throw new Error(data.error?.message || '请求失败');
-          }
-          
-          handleResponse(model, input, data, performance.now() - startTime);
-        } catch (error) {
-          showError(error.message);
-          addToHistory(model, input, null, 'error');
+          const createData = await createRes.json();
+          if (!createRes.ok) throw new Error(createData?.message || createData?.error?.message || 'Meshy 任务创建失败');
+
+          const taskId = getMeshyTaskId(createData);
+          if (!taskId) throw new Error('Meshy 任务创建成功但未返回任务ID');
+
+          updateStatusMessage(`Meshy任务已创建（${taskId}），正在轮询结果...`);
+          const result = await pollMeshyTask(config, generationType, taskId, startTime);
+          handleResponse(model, input, result, result.duration);
         }
+      } catch (error) {
+        showError(error.message);
+        addToHistory(model, input, null, 'error');
       }
     }
     
@@ -1703,7 +1731,7 @@
         const config = JSON.parse(bananaConfig);
         configs.banana = config;
         
-        document.getElementById('banana-api-url').value = config.apiUrl || 'https://api.banana-ai.org';
+        document.getElementById('banana-api-url').value = config.apiUrl || 'https://generativelanguage.googleapis.com/v1beta';
         document.getElementById('banana-api-key').value = config.apiKey || '';
         document.getElementById('banana-model').value = config.model || 'nano-banana-2';
         document.getElementById('banana-format').value = config.format || 'png';
@@ -1717,7 +1745,7 @@
         const config = JSON.parse(meshyConfig);
         configs.meshy = config;
         
-        document.getElementById('meshy-api-url').value = config.apiUrl || 'https://api.meshy.ai';
+        document.getElementById('meshy-api-url').value = config.apiUrl || 'https://api.meshy.ai/openapi/v2';
         document.getElementById('meshy-api-key').value = config.apiKey || '';
         document.getElementById('meshy-model').value = config.model || 'meshy-6';
         document.getElementById('meshy-format').value = config.format || 'glb';
@@ -1878,79 +1906,6 @@
       return Math.ceil(text.length / 4);
     }
     
-    // 模拟DeepSeek响应
-    function simulateDeepSeekResponse(input) {
-      const responses = [
-        "我是一个由DeepSeek开发的AI助手，可以帮助您解答问题、提供信息和进行对话。您有什么需要帮助的吗？",
-        "根据您的问题，我需要分析几个关键点。首先，我们需要考虑问题的本质；其次，我们需要收集相关信息；最后，我们需要综合分析并给出结论。",
-        "这是一个很有趣的问题！让我从多个角度来思考一下。从技术角度来看，这涉及到多个复杂的因素；从用户体验角度来看，我们需要考虑易用性和效率；从商业角度来看，我们需要评估可行性和回报率。",
-        "感谢您的提问！这个问题涉及到多个方面，我来为您详细解答。首先，让我们了解基本概念；然后，我们探讨实际应用；最后，我们展望未来发展趋势。",
-        "作为AI助手，我可以帮助您完成各种任务，包括但不限于：回答问题、提供建议、生成内容、辅助学习等。请告诉我您具体需要什么帮助。"
-      ];
-      
-      // 随机选择一个响应
-      const randomResponse = responses[Math.floor(Math.random() * responses.length)];
-      
-      // 根据输入长度调整响应长度
-      const inputLength = input.length;
-      let response = randomResponse;
-      
-      if (inputLength > 100) {
-        response += "\n\n此外，我还想补充几点：\n1. 我们需要考虑长期影响\n2. 数据驱动的决策更加可靠\n3. 持续优化是成功的关键";
-      }
-      
-      return {
-        content: response,
-        model: "deepseek-chat",
-        usage: {
-          prompt_tokens: estimateTokens(input),
-          completion_tokens: estimateTokens(response),
-          total_tokens: estimateTokens(input) + estimateTokens(response)
-        }
-      };
-    }
-    
-    // 模拟Banana响应
-    function simulateBananaResponse(input) {
-      // 生成随机图像URL（实际应该是API返回的图像URL）
-      const imageUrls = [
-        "https://p3-flow-imagex-sign.byteimg.com/tos-cn-i-a9rns2rl98/rc/pc/super_tool/c0d6010410d4449eab2515f368144c5c~tplv-a9rns2rl98-image.image?lk3s=8e244e95&rcl=20260324095141330711DFA1D2B62900A4&rrcfp=f06b921b&x-expires=1776909145&x-signature=n3ZTTfrgLid%2FD6TWqtHPICNYFAc%3D",
-        "https://p3-doubao-search-sign.byteimg.com/labis/image/dec8cab229e873502d0cc0588b8f5ea5~tplv-be4g95zd3a-image.jpeg?lk3s=feb11e32&x-expires=1789869135&x-signature=LszZA4z32epGQes5uwlZ9gcAgg4%3D",
-        "https://p26-doubao-search-sign.byteimg.com/labis/image/2ce8aa18d2349002e0e7248ee1fad12b~tplv-be4g95zd3a-image.jpeg?lk3s=feb11e32&x-expires=1789869135&x-signature=zvo5NK93rU1%2B7LqqRGIh4VEtux0%3D"
-      ];
-      
-      const randomImageUrl = imageUrls[Math.floor(Math.random() * imageUrls.length)];
-      
-      return {
-        imageUrl: randomImageUrl,
-        model: "nano-banana-2",
-        prompt: input,
-        width: 1024,
-        height: 1024,
-        format: "png"
-      };
-    }
-    
-    // 模拟Meshy响应
-    function simulateMeshyResponse(input) {
-      // 生成随机模型URL和预览URL（实际应该是API返回的URL）
-      const previewUrls = [
-        "https://p3-flow-imagex-sign.byteimg.com/tos-cn-i-a9rns2rl98/rc/pc/super_tool/c0d6010410d4449eab2515f368144c5c~tplv-a9rns2rl98-image.image?lk3s=8e244e95&rcl=20260324095141330711DFA1D2B62900A4&rrcfp=f06b921b&x-expires=1776909145&x-signature=n3ZTTfrgLid%2FD6TWqtHPICNYFAc%3D",
-        "https://p3-doubao-search-sign.byteimg.com/labis/image/dec8cab229e873502d0cc0588b8f5ea5~tplv-be4g95zd3a-image.jpeg?lk3s=feb11e32&x-expires=1789869135&x-signature=LszZA4z32epGQes5uwlZ9gcAgg4%3D"
-      ];
-      
-      const randomPreviewUrl = previewUrls[Math.floor(Math.random() * previewUrls.length)];
-      
-      return {
-        modelUrl: "https://example.com/model.glb", // 实际应该是API返回的模型URL
-        previewUrl: randomPreviewUrl,
-        model: "meshy-6",
-        prompt: input,
-        format: "glb",
-        textureQuality: "medium",
-        topology: "medium"
-      };
-    }
   </script>
 </body>
 </html>
