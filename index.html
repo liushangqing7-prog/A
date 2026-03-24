@@ -1020,7 +1020,7 @@
           ? `${config.apiUrl}/text-to-3d/${taskId}`
           : `${config.apiUrl}/image-to-3d/${taskId}`;
 
-        const queryRes = await fetchWithCORS(queryUrl, {
+        const queryRes = await requestWithTimeout(queryUrl, {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${config.apiKey}`
@@ -1060,7 +1060,7 @@
     }
 
     // 带超时与可选代理的 fetch
-    async function fetchWithCORS(url, options = {}) {
+    async function requestWithTimeout(url, options = {}) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
       const finalUrl = USE_CORS_PROXY ? `${CORS_PROXY}${url}` : url;
@@ -1106,7 +1106,7 @@
           };
 
           const apiUrl = `${config.apiUrl}/chat/completions`;
-          const response = await fetchWithCORS(apiUrl, {
+          const response = await requestWithTimeout(apiUrl, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -1131,7 +1131,7 @@
           };
 
           const apiUrl = `${config.apiUrl}/images/generations`;
-          const response = await fetchWithCORS(apiUrl, {
+          const response = await requestWithTimeout(apiUrl, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -1166,7 +1166,7 @@
           const createUrl = generationType === 'text-to-3d'
             ? `${config.apiUrl}/text-to-3d`
             : `${config.apiUrl}/image-to-3d`;
-          const createRes = await fetchWithCORS(createUrl, {
+          const createRes = await requestWithTimeout(createUrl, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
